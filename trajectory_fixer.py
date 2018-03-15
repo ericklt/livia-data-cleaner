@@ -184,9 +184,6 @@ def main(filemane):
 
     save_trajectories('fixed_' + filename, new_trajectories)
 
-
-filename = 'taxi_hot_10_60min.csv'
-# filename = 'traj_982342119_barefoot.csv'
-
-main(filename)
+if __name__ == '__main__':
+    main(sys.argv[1])
 
