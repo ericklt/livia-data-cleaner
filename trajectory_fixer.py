@@ -175,7 +175,7 @@ class TrajectoryFixer:
 
         return new_trajectories
 
-def main(filemane):
+def main(filename):
 
     trajectories = read_trajectories(filename)
 
