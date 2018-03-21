@@ -19,10 +19,10 @@ def main(filename):
 
         for line in lines[1:]:
             data_line = line.split(';')
-            new_id = data_line[0]
+            new_id = data_line[1]
             if new_id not in trajectories:
                 trajectories[new_id] = []
-            trajectories[new_id].append(Point(data_line[1], data_line[2], data_line[3]))
+            trajectories[new_id].append(Point(data_line[2], data_line[3], data_line[4]))
 
     for _id in trajectories:
         trajectories[_id].sort(key=lambda p : p.t)

@@ -75,21 +75,6 @@ class Point:
     def distance(self, p):
         return np.linalg.norm(self.arr - p.arr)
 
-def read_trajectories(filename):
-    print('Reading: ', filename)
-
-    trajectories = {}
-    with open(filename, 'r') as f:
-        lines = f.readlines()
-
-        for line in lines[1:]:
-            data_line = line.split(';')
-            new_id = data_line[0]
-            if new_id not in trajectories:
-                trajectories[new_id] = []
-            trajectories[new_id].append(Point(data_line[1], data_line[2], data_line[3]))
-    return trajectories
-
 def save_trajectories(output_filename, trajectories):
     print('Saving: ', output_filename)
     with open(output_filename, 'w') as f:
@@ -106,10 +91,11 @@ class TrajectoryFixer:
         self.min_boundary = min_boundary
         self.watch = StopWatch()
         self.progress_bar = None
+        self.next_id = 0
 
-    def order_by_timestamp(self, trajectories):
-        for t in trajectories:
-            trajectories[t] = sorted(trajectories[t], key = lambda x: x.t)
+    def line_count(self, filename):
+        with open(filename) as f:
+            return sum(1 for l in f) - 1
 
     def isvalid(self, traj):
         max_lat, min_lat, max_lng, min_lng = -np.inf, np.inf, -np.inf, np.inf
@@ -151,39 +137,55 @@ class TrajectoryFixer:
                 fixed.append(new_traj)
         return fixed
 
-    def fix_trajectories(self, trajectories):
-        self.order_by_timestamp(trajectories)
-        new_trajectories = {}
-        counter = 0
+    def process_and_save_trajectory(self, tid, trajectory, output_filename):
+        trajectory = sorted(trajectory, key = lambda x: x.t)
 
-        key_list = [key for key in trajectories if self.isvalid(trajectories[key])]
+        with open(output_filename, 'a') as f:
 
-        self.progress_bar = ProgressBar(len(key_list), 40, prefix=self.watch.get_time())
+            for traj in self.fix_and_split(trajectory):
+                for p in traj:
+                    f.write('{};{};{};{};{}\n'.format(tid, self.new_id, p.lat, p.lng, p.t))
+                self.new_id += 1
+
+    def fix_trajectories(self, filename, output_filename=None):
+        if not output_filename:
+            output_filename = 'fixed_' + filename
+
+        print('Fixing: "{}" => "{}"'.format(filename, output_filename))
+
+        with open(output_filename, 'w') as f:
+            f.write('driver_id;id;lat;lng;timestamp\n')
+        self.new_id = 0
+
+        self.progress_bar = ProgressBar(self.line_count(filename), 40, prefix=self.watch.get_time())
         self.progress_bar.draw()
-
         self.watch.start()
 
-        for _id in key_list:
+        with open(filename, 'r') as f:
 
-            counter += 1
-            self.progress_bar.set(counter)
+            lines = iter(f)
+            next(lines)
+            prev_id = None
+            trajectory = []
+            for line in lines:
+                self.progress_bar.step()
+                data_line = line.rstrip().split(';')
+                new_id = data_line[0]
+                if new_id != prev_id:
+                    if trajectory and self.isvalid(trajectory):
+                        self.process_and_save_trajectory(prev_id, trajectory, output_filename)
+                    trajectory = []
+                    prev_id = new_id
+                trajectory.append(Point(data_line[1], data_line[2], data_line[3]))
 
-            for traj in self.fix_and_split(trajectories[_id]):
-                new_trajectories[len(new_trajectories)] = traj
+            if trajectory and self.isvalid(trajectory):
+                self.process_and_save_trajectory(prev_id, trajectory, output_filename)
 
         print('Total time : {}'.format(self.watch.get_time()))
 
-        return new_trajectories
-
 def main(filename):
-
-    trajectories = read_trajectories(filename)
-
     trajectory_fixer = TrajectoryFixer()
-
-    new_trajectories = trajectory_fixer.fix_trajectories(trajectories)
-
-    save_trajectories('fixed_' + filename, new_trajectories)
+    trajectory_fixer.fix_trajectories(filename)
 
 if __name__ == '__main__':
     main(sys.argv[1])
