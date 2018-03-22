@@ -24,6 +24,7 @@ class ProgressBar:
         self.prefix = str(prefix) + ' - '
         self.suffix = ' - ' + str(suffix)
         self.visible = False
+        self.changedIn = datetime.now()
 
     def set_visible(self, visible):
         self.visible = visible
@@ -50,8 +51,11 @@ class ProgressBar:
 
     def draw(self):
         self.visible = True
-        self.calculate_percentage()
-        print('\r{}[{}{}]( {:.1f}% ){}{}'.format(self.prefix, '#'*round(self.percent * self.size), ' '*round((1-self.percent)*self.size), 100*self.percent, self.suffix, ' '*10), end='', flush=True)
+        timedelta = datetime.now() - self.changedIn
+        if timedelta.total_seconds() >= 0.5:
+            self.changedIn = datetime.now()
+            self.calculate_percentage()
+            print('\r{}[{}{}]( {:.1f}% ){}{}'.format(self.prefix, '#'*round(self.percent * self.size), ' '*round((1-self.percent)*self.size), 100*self.percent, self.suffix, ' '*10), end='', flush=True)
 
 class Point:
     def __init__(self, lat, lng, t=0):
