@@ -75,13 +75,27 @@ class Point:
     def distance(self, p):
         return np.linalg.norm(self.arr - p.arr)
 
-def save_trajectories(output_filename, trajectories):
-    print('Saving: ', output_filename)
-    with open(output_filename, 'w') as f:
-        f.write('id;lat;lng;timestamp\n')
-        for _id in trajectories:
-            for p in trajectories[_id]:
-                f.write('{};{};{};{}\n'.format(str(_id), p.lat, p.lng, p.t))
+class Statistics:
+
+    def __init__(self, *args):
+        self.statistics = { key : lambda:0 for key in args}
+
+    def __setitem__(self, key, value):
+        self.statistics[key] = lambda:value
+
+    def __getitem__(self, key):
+        if key not in self.statistics:
+            print('{} not in statistics'.format(key))
+        else:
+            return self.statistics[key]()
+
+    def add_lambda_statistics(self, new_key, func, key1, key2):
+        self.statistics[new_key] = lambda: func(self[key1], self[key2])
+
+    def save(self, filename):
+        with open('statistics_' + filename, 'w') as f:
+            for key in self.statistics:
+                f.write('{} : {}\n'.format(key, self[key]))
 
 class TrajectoryFixer:
 
@@ -92,6 +106,14 @@ class TrajectoryFixer:
         self.watch = StopWatch()
         self.progress_bar = None
         self.next_id = 0
+        self.statistics = Statistics('n_points', 'mantained_points', 'n_of_trajectories', 'number_of_mantained_drivers', 'end_n_of_trajectories', 'total_time')
+        self.statistics.add_lambda_statistics('trajectories_too_short', lambda x1, x2: x1-x2, 'n_of_trajectories', 'number_of_mantained_drivers')
+        self.statistics.add_lambda_statistics('discarded_points', lambda x1, x2: x1-x2, 'n_points', 'mantained_points')
+        self.statistics.add_lambda_statistics('discarded_points_proportion', lambda x1, x2: x1/x2, 'discarded_points', 'n_points')
+        self.statistics.add_lambda_statistics('end_number_of_trajectories_proportion', lambda x1, x2: x1/x2, 'end_n_of_trajectories', 'n_of_trajectories')
+        self.statistics.add_lambda_statistics('trajectories_too_short_proportion', lambda x1, x2: x1/x2, 'trajectories_too_short', 'n_of_trajectories')
+        self.statistics.add_lambda_statistics('mean_time_between_points_before_processing', lambda x1, x2: x1/x2, 'total_time', 'n_points')
+        self.statistics.add_lambda_statistics('mean_time_between_points_after_processing', lambda x1, x2: x1/x2, 'total_time', 'mantained_points')
 
     def line_count(self, filename):
         with open(filename) as f:
@@ -144,7 +166,10 @@ class TrajectoryFixer:
 
             for traj in self.fix_and_split(trajectory):
                 for p in traj:
+                    self.statistics['mantained_points'] += 1
                     f.write('{};{};{};{};{}\n'.format(tid, self.new_id, p.lat, p.lng, p.t))
+                self.statistics['total_time'] += traj[-1].t - traj[0].t
+                self.statistics['end_n_of_trajectories'] += 1
                 self.new_id += 1
 
     def fix_trajectories(self, filename, output_filename=None):
@@ -157,7 +182,10 @@ class TrajectoryFixer:
             f.write('driver_id;id;lat;lng;timestamp\n')
         self.new_id = 0
 
-        self.progress_bar = ProgressBar(self.line_count(filename), 40, prefix=self.watch.get_time())
+        n_points = self.line_count(filename)
+        self.statistics['n_points'] = n_points
+
+        self.progress_bar = ProgressBar(n_points, 40, prefix=self.watch.get_time())
         self.progress_bar.draw()
         self.watch.start()
 
@@ -172,15 +200,20 @@ class TrajectoryFixer:
                 data_line = line.rstrip().split(';')
                 new_id = data_line[0]
                 if new_id != prev_id:
+                    self.statistics['n_of_trajectories'] += 1
                     if trajectory and self.isvalid(trajectory):
+                        self.statistics['number_of_mantained_drivers'] += 1
                         self.process_and_save_trajectory(prev_id, trajectory, output_filename)
                     trajectory = []
                     prev_id = new_id
                 trajectory.append(Point(data_line[1], data_line[2], data_line[3]))
 
+            self.statistics['n_of_trajectories'] += 1
             if trajectory and self.isvalid(trajectory):
+                self.statistics['number_of_mantained_drivers'] += 1
                 self.process_and_save_trajectory(prev_id, trajectory, output_filename)
 
+        self.statistics.save(filename)
         print('Total time : {}'.format(self.watch.get_time()))
 
 def main(filename):
