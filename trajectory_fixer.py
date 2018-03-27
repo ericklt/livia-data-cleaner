@@ -91,19 +91,22 @@ class Statistics:
         if key not in self.statistics:
             print('{} not in statistics'.format(key))
         else:
-            return self.statistics[key]()
+            try:
+                return self.statistics[key]()
+            except:
+                return np.nan
 
     def add_lambda_statistics(self, new_key, func, key1, key2):
         self.statistics[new_key] = lambda: func(self[key1], self[key2])
 
     def save(self, filename):
         with open('statistics_' + filename, 'w') as f:
-            for key in self.statistics:
+            for key in sorted([k for k in self.statistics]):
                 f.write('{} : {}\n'.format(key, self[key]))
 
 class TrajectoryFixer:
 
-    def __init__(self, spatial_limit = 0.002, time_limit = 30000, min_boundary = 0.01):
+    def __init__(self, spatial_limit = 0.005, time_limit = 30000, min_boundary = 0.002):
         self.spatial_limit = spatial_limit
         self.time_limit = time_limit
         self.min_boundary = min_boundary
