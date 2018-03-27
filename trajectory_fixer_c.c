@@ -4,9 +4,9 @@
 #include <math.h>
 #include <string.h>
 
-#define SPATIAL_LIMIT 0.005
+#define SPATIAL_LIMIT 0.003
 #define TIME_LIMIT 30000
-#define MIN_BOUNDARY 0.001
+#define MIN_BOUNDARY 0.01
 
 // --------------------------------------------------------------------
 // ---------------------   Progress Bar   -----------------------------
@@ -135,13 +135,12 @@ void printTrajectory(Trajectory* t) {
         printPoint(t->points[i]);
 }
 
-void freeTrajectory(Trajectory** t) {
+void freeTrajectory(Trajectory* t) {
     int i;
-    for (i = 0; i < (*t)->filled; i++)
-        free((*t)->points[i]);
-    free((*t)->points);
-    free((*t));
-    *t = NULL;
+    for (i = 0; i < t->filled; i++)
+        free(t->points[i]);
+    free(t->points);
+    free(t);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,9 +279,11 @@ int isValid(Trajectory* trajectory) {
         if (p->lat < min_lat) min_lat = p->lat;
         if (p->lng > max_lng) max_lng = p->lng;
         if (p->lng < min_lng) min_lng = p->lng;
+        if (max_lat - min_lat > MIN_BOUNDARY || max_lng - min_lng > MIN_BOUNDARY)
+            return 1;
     }
 
-    return max_lat - min_lat > MIN_BOUNDARY || max_lng - min_lng > MIN_BOUNDARY;
+    return 0;
 }
 
 int getClosestPointIndex(Trajectory* t, Point* p, int rangeStart, int rangeEnd) {
@@ -343,6 +344,7 @@ void readAndProcess(char* inputFileName) {
     while((t = readTrajectory(reader)) != NULL) {
         sliceNspliceNsave(t, writer);
         set(progress, progress->current + t->filled);
+        freeTrajectory(t);
     }
 
     flushProgress(progress);

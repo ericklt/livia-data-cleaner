@@ -9,34 +9,36 @@ class Point:
     def __str__(self):
         return '{};{}'.format(self.lat, self.lng)
 
+def save_trajectory(output, tid, trajectory):
+    line = [tid] + [str(p) for p in sorted(trajectory, key= lambda p: p.t)]
+    output.write(';'.join(line))
+    output.write('\n')
+
 def main(filename):
 
-    print('Reading: ', filename)
-
-    trajectories = {}
-    with open(filename, 'r') as f:
-        lines = f.readlines()
-
-        for line in lines[1:]:
-            data_line = line.split(';')
-            new_id = data_line[1]
-            if new_id not in trajectories:
-                trajectories[new_id] = []
-            trajectories[new_id].append(Point(data_line[2], data_line[3], data_line[4]))
-
-    for _id in trajectories:
-        trajectories[_id].sort(key=lambda p : p.t)
-
-    print('{}, {}'.format(max(trajectories.keys()), min(trajectories.keys())))
-
     output_filename = 'converted_' + filename
-    print('Saving: ', output_filename)
 
-    with open(output_filename, 'a') as f:
-        for _id in trajectories:
-            line = [_id] + [str(p) for p in trajectories[_id]]
-            f.write(';'.join(line))
-            f.write('\n')
+    print('Converting: "{}" => "{}"'.format(filename, output_filename))
+
+    with open(filename, 'r') as f:
+        with open(output_filename, 'w') as output:
+
+            trajectory = []
+            current_id = None
+            for line in f:
+                if line.startswith(('driver', 'id')):
+                    continue
+                data_line = line.split(';')
+                if not current_id:
+                    current_id = data_line[1]
+                new_id = data_line[1]
+                if new_id != current_id:
+                    save_trajectory(output, current_id, trajectory)
+                    trajectory = []
+                trajectory.append(Point(data_line[2], data_line[3], data_line[4]))
+                current_id = new_id
+            save_trajectory(output, current_id, trajectory)
+
 
 if __name__ == '__main__':
     main(sys.argv[1])
