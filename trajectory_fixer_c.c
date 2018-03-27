@@ -12,14 +12,14 @@
 // ---------------------   Progress Bar   -----------------------------
 
 typedef struct progress {
-	int max_value;
+	long long max_value;
 	int size;
-	int current;
+	long long current;
 	clock_t changedIn;
 	clock_t startTime;
 } ProgressBar;
 
-ProgressBar* newProgressBar(int max_value, int size) {
+ProgressBar* newProgressBar(long long max_value, int size) {
 	ProgressBar* bar = (ProgressBar*) malloc(sizeof(ProgressBar));
 	bar->max_value = max_value;
 	bar->size = size;
@@ -48,6 +48,7 @@ void flushProgress(ProgressBar* bar) {
     for(i = 0; i < round((1 - percentage) * bar->size); i++)
         printf(" ");
     printf("] ( %.2f %% )", percentage*100);
+    fflush(stdout);
 }
 
 void draw(ProgressBar* bar) {
@@ -55,7 +56,7 @@ void draw(ProgressBar* bar) {
     if (bar->startTime == -1)
         bar->startTime = now;
     float deltaTime = (float)(now - bar->changedIn) / CLOCKS_PER_SEC;
-    if (deltaTime >= 0.5)
+    if (deltaTime >= 1)
         flushProgress(bar);
 }
 
@@ -135,12 +136,16 @@ void printTrajectory(Trajectory* t) {
         printPoint(t->points[i]);
 }
 
+void softFreeTrajectory(Trajectory* t) {
+    free(t->points);
+    free(t);
+}
+
 void freeTrajectory(Trajectory* t) {
     int i;
     for (i = 0; i < t->filled; i++)
         free(t->points[i]);
-    free(t->points);
-    free(t);
+    softFreeTrajectory(t);
 }
 
 // ---------------------------------------------------------------------------
@@ -244,24 +249,30 @@ void swapPoints(Point** points, int i, int j) {
     points[j] = aux;
 }
 
-void quickSort(Point** points, int start, int end) {
-    if (end - start > 1) {
-        long long pivot = points[end-1]->t;
-        int i = start, j = start;
-        while(j < end) {
-            if (points[j]->t <= pivot) {
-                swapPoints(points, i, j);
-                i++;
-            }
-            j++;
-        }
-        quickSort(points, start, i-1);
-        quickSort(points, i, end);
-    }
+// void quickSort(Point** points, int start, int end) {
+//     if (end - start > 1) {
+//         long long pivot = points[end-1]->t;
+//         int i = start, j = start;
+//         while(j < end) {
+//             if (points[j]->t <= pivot) {
+//                 swapPoints(points, i, j);
+//                 i++;
+//             }
+//             j++;
+//         }
+//         quickSort(points, start, i-1);
+//         quickSort(points, i, end);
+//     }
+// }
+
+int comparePoints(const void *e1, const void *e2) {
+    Point* p1 = (Point*) e1;
+    Point* p2 = (Point*) e2;
+    return p1->t - p2->t;
 }
 
 void sortTrajectory(Trajectory* t) {
-    quickSort(t->points, 0, t->filled);
+    qsort(t->points, t->filled, sizeof(Point*), comparePoints);
 }
 
 int isValid(Trajectory* trajectory) {
@@ -304,7 +315,9 @@ int getClosestPointIndex(Trajectory* t, Point* p, int rangeStart, int rangeEnd) 
 
 void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer) {
     int start = 0, end = 1;
+    // printf("\tSorting... ");
     sortTrajectory(originalTrajectory);
+    // printf("Done\n");
     Trajectory* t = newTrajectory();
     Point* p;
     while (start < originalTrajectory->filled) {
@@ -316,6 +329,7 @@ void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer)
         if (minIndex == originalTrajectory->filled || distance(p, originalTrajectory->points[minIndex]) > SPATIAL_LIMIT) {
             if (isValid(t))
                 writeTrajectory(writer, t);
+            softFreeTrajectory(t);
             t = newTrajectory();
         }
         start = minIndex;
@@ -323,7 +337,8 @@ void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer)
 }
 
 void readAndProcess(char* inputFileName) {
-    int totalNumberOfPoints = getTotalNumberOfPoints(inputFileName);
+    long long totalNumberOfPoints = getTotalNumberOfPoints(inputFileName);
+    // printf("N points: %lld\n", totalNumberOfPoints);
     char* outputFileName = getOutputFileName(inputFileName);
     FILE* input = fopen(inputFileName, "r");
     FILE* output = fopen(outputFileName, "w");
@@ -342,7 +357,9 @@ void readAndProcess(char* inputFileName) {
     Trajectory* t;
 
     while((t = readTrajectory(reader)) != NULL) {
+        // printf("Starting processing...\n");
         sliceNspliceNsave(t, writer);
+        // printf("Done\n");
         set(progress, progress->current + t->filled);
         freeTrajectory(t);
     }
