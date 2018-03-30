@@ -3,10 +3,57 @@
 #include <time.h>
 #include <math.h>
 #include <string.h>
+#include <pthread.h>
 
 #define SPATIAL_LIMIT 0.003
 #define TIME_LIMIT 30000
 #define MIN_BOUNDARY 0.01
+
+#define max(a,b) \
+    ({  __typeof__ (a) _a = (a); \
+        __typeof__ (b) _b = (b); \
+        _a > _b ? _a : _b; })
+
+#define min(a,b) \
+    ({  __typeof__ (a) _a = (a); \
+        __typeof__ (b) _b = (b); \
+        _a < _b ? _a : _b; })
+
+// --------------------------------------------------------------------
+// -----------------------   StopWatch   ------------------------------
+
+typedef struct {
+    char* name;
+    double current;
+    double start;
+    int running;
+} StopWatch;
+
+StopWatch* newStopWatch(char* name) {
+    StopWatch* watch = (StopWatch*) malloc(sizeof(StopWatch));
+    watch->name = name;
+    watch->current = 0;
+    watch->running = 0;
+}
+
+void startClock(StopWatch* watch) {
+    watch->start = clock();
+    watch->running = 1;
+}
+
+void stopClock(StopWatch* watch) {
+    if (watch->running) {
+        watch->current += (clock() - watch->start) / CLOCKS_PER_SEC;
+        watch->running = 0;
+    }
+}
+
+double getTime(StopWatch* watch) {
+    int time = watch->current;
+    if (watch->running)
+        time += (clock() - watch->start) / CLOCKS_PER_SEC;
+    return time;
+}
 
 // --------------------------------------------------------------------
 // ---------------------   Progress Bar   -----------------------------
@@ -15,17 +62,17 @@ typedef struct progress {
 	long long max_value;
 	int size;
 	long long current;
-	clock_t changedIn;
-	clock_t startTime;
+	double changedIn;
+	StopWatch* watch;
 } ProgressBar;
 
-ProgressBar* newProgressBar(long long max_value, int size) {
+ProgressBar* newProgressBar(long long max_value, int size, StopWatch* watch) {
 	ProgressBar* bar = (ProgressBar*) malloc(sizeof(ProgressBar));
 	bar->max_value = max_value;
 	bar->size = size;
 	bar->current = 0;
 	bar->changedIn = clock();
-	bar->startTime = -1;
+	bar->watch = watch;
 	return bar;
 }
 
@@ -35,7 +82,7 @@ float getPercentage(ProgressBar* bar) {
 
 void flushProgress(ProgressBar* bar) {
     bar->changedIn = clock();
-    int totalTime = (int) ( (float)(bar->changedIn - bar->startTime) / CLOCKS_PER_SEC );
+    int totalTime = round(getTime(bar->watch));
     int hours = totalTime / 3600;
     int minutes = (totalTime % 3600) / 60;
     int seconds = totalTime % 60;
@@ -52,10 +99,8 @@ void flushProgress(ProgressBar* bar) {
 }
 
 void draw(ProgressBar* bar) {
-    clock_t now = clock();
-    if (bar->startTime == -1)
-        bar->startTime = now;
-    float deltaTime = (float)(now - bar->changedIn) / CLOCKS_PER_SEC;
+    double now = clock();
+    float deltaTime = (now - bar->changedIn) / CLOCKS_PER_SEC;
     if (deltaTime >= 1)
         flushProgress(bar);
 }
@@ -90,7 +135,8 @@ Point* newPoint(int taxiId, double lat, double lng, long long t) {
 }
 
 double distance(Point* p1, Point* p2) {
-    return sqrt(pow(p2->lat - p1->lat, 2) + pow(p2->lng - p1->lng, 2));
+    // return sqrt(pow(p2->lat - p1->lat, 2) + pow(p2->lng - p1->lng, 2));
+    return hypot(p2->lat - p1->lat, p2->lng - p1->lng);
 }
 
 void printPoint(Point* p) {
@@ -105,6 +151,7 @@ typedef struct {
     int size;
     int filled;
     Point** points;
+    double minLat, minLng, maxLat, maxLng;
 } Trajectory;
 
 Trajectory* newTrajectory() {
@@ -123,6 +170,15 @@ void addPoint(Trajectory* t, Point* p) {
     }
     t->points[t->filled] = p;
     t->filled ++;
+    if (t->filled == 1) {
+        t->minLat = t->maxLat = p->lat;
+        t->minLng = t->maxLng = p->lng;
+    } else {
+        t->minLat = min(t->minLat, p->lat);
+        t->minLng = min(t->minLng, p->lng);
+        t->maxLat = max(t->maxLat, p->lat);
+        t->maxLng = max(t->maxLng, p->lng);
+    }
 }
 
 Point* getPoint(Trajectory* t, int index) {
@@ -148,16 +204,27 @@ void freeTrajectory(Trajectory* t) {
     softFreeTrajectory(t);
 }
 
+int isValid(Trajectory* trajectory) {
+    if (trajectory == NULL || trajectory->filled == 0)
+        return 0;
+
+    return trajectory->maxLat - trajectory->minLat > MIN_BOUNDARY || trajectory->maxLng - trajectory->minLng > MIN_BOUNDARY;
+}
+
 // ---------------------------------------------------------------------------
 // ---------------------------   Utils   -------------------------------------
+
+char* skipLine(FILE* input) {
+    char line[128];
+    return fgets(line, 128, input);
+}
 
 int getTotalNumberOfPoints(char* inputFileName) {
     FILE* input = fopen(inputFileName, "r");
     if (input == NULL) return -1;
     
     int counter = 0;
-    char line[128];
-    while( fgets(line, 128, input) ) counter++;
+    while( skipLine(input) ) counter++;
     fclose(input);
     return counter - 1;
 }
@@ -173,13 +240,12 @@ Point* readPoint(FILE* input) {
     int id;
     double lat, lng;
     long long timestamp;
-    char* line = (char*) malloc(sizeof(char) * 128);
-    if (fgets(line, 128, input) == NULL)
-        return NULL;
-    id = strtol(line, &line, 10);   line++;
-    lat = strtod(line, &line);      line++;
-    lng = strtod(line, &line);      line++;
-    timestamp = strtoll(line, &line, 10);
+    // char* line = (char*) malloc(sizeof(char) * 128);
+    // if (fgets(line, 128, input) == NULL)
+    //     return NULL;
+    // sscanf(line, "%d;%lf;%lf;%lld", &id, &lat, &lng, &timestamp);
+    if (feof(input)) return NULL;
+    fscanf(input, "%d;%lf;%lf;%lld\n", &id, &lat, &lng, &timestamp);
     Point* p = newPoint(id, lat, lng, timestamp);
     return p;
 }
@@ -193,7 +259,7 @@ TrajectoryReader* newTrajectoryReader(FILE* input) {
     TrajectoryReader* reader = (TrajectoryReader*) malloc(sizeof(TrajectoryReader));
     reader->input = input;
     reader->buffer = NULL;
-    readPoint(input);
+    skipLine(input);
     return reader;
 }
 
@@ -242,59 +308,14 @@ void writeTrajectory(TrajectoryWriter* writer, Trajectory* t) {
 // -----------------------------------------------------------------------------------
 // -------------------------   Actual Processing   -----------------------------------
 
-void swapPoints(Point** points, int i, int j) {
-    if (i == j) return;
-    Point* aux = points[i];
-    points[i] = points[j];
-    points[j] = aux;
-}
-
-// void quickSort(Point** points, int start, int end) {
-//     if (end - start > 1) {
-//         long long pivot = points[end-1]->t;
-//         int i = start, j = start;
-//         while(j < end) {
-//             if (points[j]->t <= pivot) {
-//                 swapPoints(points, i, j);
-//                 i++;
-//             }
-//             j++;
-//         }
-//         quickSort(points, start, i-1);
-//         quickSort(points, i, end);
-//     }
-// }
-
 int comparePoints(const void *e1, const void *e2) {
-    Point* p1 = (Point*) e1;
-    Point* p2 = (Point*) e2;
+    Point* p1 = *(Point**) e1;
+    Point* p2 = *(Point**) e2;
     return p1->t - p2->t;
 }
 
 void sortTrajectory(Trajectory* t) {
     qsort(t->points, t->filled, sizeof(Point*), comparePoints);
-}
-
-int isValid(Trajectory* trajectory) {
-    if (trajectory == NULL || trajectory->filled == 0)
-        return 0;
-    Point* p = trajectory->points[0];
-    double  max_lat = p->lat, 
-            min_lat = p->lat, 
-            max_lng = p->lng, 
-            min_lng = p->lng;
-    int i;
-    for (i = 1; i < trajectory->filled; i++) {
-        p = trajectory->points[i];
-        if (p->lat > max_lat) max_lat = p->lat;
-        if (p->lat < min_lat) min_lat = p->lat;
-        if (p->lng > max_lng) max_lng = p->lng;
-        if (p->lng < min_lng) min_lng = p->lng;
-        if (max_lat - min_lat > MIN_BOUNDARY || max_lng - min_lng > MIN_BOUNDARY)
-            return 1;
-    }
-
-    return 0;
 }
 
 int getClosestPointIndex(Trajectory* t, Point* p, int rangeStart, int rangeEnd) {
@@ -313,31 +334,67 @@ int getClosestPointIndex(Trajectory* t, Point* p, int rangeStart, int rangeEnd) 
     return minIndex;
 }
 
-void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer) {
+typedef struct {
+    Trajectory* t;
+    TrajectoryWriter* writer;
+    StopWatch** watches;
+} AuxParameter;
+
+AuxParameter* newAuxParameter(Trajectory* t, TrajectoryWriter* writer, StopWatch** watches) {
+    AuxParameter* param = (AuxParameter*) malloc(sizeof(AuxParameter));
+    param->t = t;
+    param->writer = writer;
+    param->watches = watches;
+    return param;
+}
+
+void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer, StopWatch** watches) {
     int start = 0, end = 1;
     // printf("\tSorting... ");
+    startClock(watches[1]);
     sortTrajectory(originalTrajectory);
+    stopClock(watches[1]);
     // printf("Done\n");
     Trajectory* t = newTrajectory();
     Point* p;
+    startClock(watches[2]);
     while (start < originalTrajectory->filled) {
         p = originalTrajectory->points[start];
         addPoint(t, p);
         while(end < originalTrajectory->filled && originalTrajectory->points[end]->t < p->t + TIME_LIMIT) 
             end++;
+        startClock(watches[4]);
         int minIndex = getClosestPointIndex(originalTrajectory, p, start+1, end);
+        stopClock(watches[4]);
         if (minIndex == originalTrajectory->filled || distance(p, originalTrajectory->points[minIndex]) > SPATIAL_LIMIT) {
-            if (isValid(t))
+            if (isValid(t)) {
+                startClock(watches[3]);
                 writeTrajectory(writer, t);
+                stopClock(watches[3]);
+            }
+            
             softFreeTrajectory(t);
             t = newTrajectory();
         }
         start = minIndex;
     }
+    stopClock(watches[2]);
 }
 
-void readAndProcess(char* inputFileName) {
+void* sliceNspliceNsaveOnThread(void* param) {
+    AuxParameter* auxPar = (AuxParameter*) param;
+    sliceNspliceNsave(auxPar->t, auxPar->writer, auxPar->watches);
+    return (void*) NULL;
+}
+
+void* readTrajectoryOnThread(void* reader) {
+    return (void*) readTrajectory((TrajectoryReader*) reader);
+}
+
+void readAndProcess(char* inputFileName, StopWatch** watches) {
+    startClock(watches[5]);
     long long totalNumberOfPoints = getTotalNumberOfPoints(inputFileName);
+    stopClock(watches[5]);
     // printf("N points: %lld\n", totalNumberOfPoints);
     char* outputFileName = getOutputFileName(inputFileName);
     FILE* input = fopen(inputFileName, "r");
@@ -349,22 +406,38 @@ void readAndProcess(char* inputFileName) {
 
     printf("Fixing: %s => %s\n", inputFileName, outputFileName);
 
-    ProgressBar* progress = newProgressBar(totalNumberOfPoints, 50);
+    StopWatch* watch = newStopWatch("Algorithm time");
+    ProgressBar* progress = newProgressBar(totalNumberOfPoints, 50, watch);
     draw(progress);
     TrajectoryReader* reader = newTrajectoryReader(input);
     TrajectoryWriter* writer = newTrajectoryWriter(output);
 
-    Trajectory* t;
+    
+    startClock(watch);
 
-    while((t = readTrajectory(reader)) != NULL) {
-        // printf("Starting processing...\n");
-        sliceNspliceNsave(t, writer);
-        // printf("Done\n");
+    pthread_t pid1, pid2;
+
+    Trajectory* t = readTrajectory(reader);
+
+    while(t != NULL) {
+
+        pthread_create(&pid1, NULL, readTrajectoryOnThread, (void*) reader);
+        
+        pthread_create(&pid2, NULL, sliceNspliceNsaveOnThread, (void*) newAuxParameter(t, writer, watches));
+        // sliceNspliceNsave(t, writer, watches);
+
+        pthread_join(pid2, NULL);
+
         set(progress, progress->current + t->filled);
         freeTrajectory(t);
+
+        pthread_join(pid1, (void**)(&t));
+        // t = readTrajectory(reader);
     }
+    stopClock(watch);
 
     flushProgress(progress);
+    printf("\n");
 
     fclose(input);
     fclose(output);
@@ -380,6 +453,16 @@ int main(int argc, char** argv) {
         printf("Invalid number of arguments, expected 2, found %d\n", argc);
         return 1;
     }
-    readAndProcess(argv[1]);
+    StopWatch* watches[] = {newStopWatch("main_process"), 
+                            newStopWatch("sort"), 
+                            newStopWatch("actual_slice"), 
+                            newStopWatch("write_trajectory"),
+                            newStopWatch("get_nearest_point"), 
+                            newStopWatch("number_of_points")};
+    readAndProcess(argv[1], watches);
+    int i;
+    for (i = 0; i < 7; i++) {
+        printf("%s : %.2lf s\n", watches[i]->name, watches[i]->current);
+    }
 	return 0;
 }
