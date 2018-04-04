@@ -5,9 +5,12 @@
 #include <string.h>
 #include <pthread.h>
 
-#define SPATIAL_LIMIT 0.003
-#define TIME_LIMIT 30000
-#define MIN_BOUNDARY 0.01
+#define R 6378137 // Radius of earth in m
+
+#define MAX_SPEED 100  // Km/h
+#define MAX_ANGULAR_SPEED (MAX_SPEED / (R * 3.6)) * 180 / M_PI
+#define TIME_LIMIT 30000 // milliseconds
+#define MIN_BOUNDARY 0.01 // degrees
 
 #define max(a,b) \
     ({  __typeof__ (a) _a = (a); \
@@ -18,6 +21,8 @@
     ({  __typeof__ (a) _a = (a); \
         __typeof__ (b) _b = (b); \
         _a < _b ? _a : _b; })
+
+#define toKmph(mps) 3.6 * mps
 
 // --------------------------------------------------------------------
 // -----------------------   StopWatch   ------------------------------
@@ -116,6 +121,31 @@ void step(ProgressBar* bar) {
 }
 
 // ----------------------------------------------------------------------
+// ----------------------   Lat / Long Utils   --------------------------
+
+double deg2rad(double deg) {
+  return (deg * M_PI / 180);
+}
+
+double rad2deg(double rad) {
+  return (rad * 180 / M_PI);
+}
+
+double distanceInMeters(double lat1, double lng1, double lat2, double lng2) {
+    double  rLat1 = deg2rad(lat1), 
+            rLat2 = deg2rad(lat2), 
+            rLng1 = deg2rad(lng1), 
+            rLng2 = deg2rad(lng2);
+    double dLat = rLat2 - rLat1;
+    double dLng = rLng2 - rLng1;
+
+    double a = sin(dLat/2) * sin(dLat/2) + cos(rLat1) * cos(rLat2) * sin(dLng/2) * sin(dLng/2);
+    double c = 2 * atan2(sqrt(a), sqrt(1-a));
+
+    return R * c * 1000; // meters
+}
+
+// ----------------------------------------------------------------------
 // ----------------------------   Point   -------------------------------
 
 typedef struct {
@@ -137,6 +167,7 @@ Point* newPoint(int taxiId, double lat, double lng, long long t) {
 double distance(Point* p1, Point* p2) {
     // return sqrt(pow(p2->lat - p1->lat, 2) + pow(p2->lng - p1->lng, 2));
     return hypot(p2->lat - p1->lat, p2->lng - p1->lng);
+    // return distanceInMeters(p1->lat, p1->lng, p2->lat, p2->lng);
 }
 
 void printPoint(Point* p) {
@@ -240,12 +271,12 @@ Point* readPoint(FILE* input) {
     int id;
     double lat, lng;
     long long timestamp;
-    // char* line = (char*) malloc(sizeof(char) * 128);
-    // if (fgets(line, 128, input) == NULL)
-    //     return NULL;
-    // sscanf(line, "%d;%lf;%lf;%lld", &id, &lat, &lng, &timestamp);
-    if (feof(input)) return NULL;
-    fscanf(input, "%d;%lf;%lf;%lld\n", &id, &lat, &lng, &timestamp);
+    char* line = (char*) malloc(sizeof(char) * 128);
+    if (fgets(line, 128, input) == NULL)
+        return NULL;
+    sscanf(line, "%d;%lf;%lf;%lld", &id, &lat, &lng, &timestamp);
+    // if (feof(input)) return NULL;
+    // fscanf(input, "%d;%lf;%lf;%lld\n", &id, &lat, &lng, &timestamp);
     Point* p = newPoint(id, lat, lng, timestamp);
     return p;
 }
@@ -365,8 +396,11 @@ void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer,
             end++;
         startClock(watches[4]);
         int minIndex = getClosestPointIndex(originalTrajectory, p, start+1, end);
+        Point* closest = NULL;
+        if (minIndex < originalTrajectory->filled)
+            closest = originalTrajectory->points[minIndex];
         stopClock(watches[4]);
-        if (minIndex == originalTrajectory->filled || distance(p, originalTrajectory->points[minIndex]) > SPATIAL_LIMIT) {
+        if (minIndex == originalTrajectory->filled || distance(p, closest) * 1000 / (closest->t - p->t) > MAX_ANGULAR_SPEED) {
             if (isValid(t)) {
                 startClock(watches[3]);
                 writeTrajectory(writer, t);
