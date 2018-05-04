@@ -9,8 +9,9 @@
 
 #define MAX_SPEED 100  // Km/h
 #define MAX_ANGULAR_SPEED (MAX_SPEED / (R * 3.6)) * 180 / M_PI
-#define TIME_LIMIT 30000 // milliseconds
-#define MIN_BOUNDARY 0.01 // degrees
+#define TIME_LIMIT 30 // seconds
+#define MIN_FULL_TRAJ_BOUNDARY 0.05
+#define MIN_BOUNDARY 0.005 // degrees
 
 #define max(a,b) \
     ({  __typeof__ (a) _a = (a); \
@@ -170,6 +171,14 @@ double distance(Point* p1, Point* p2) {
     // return distanceInMeters(p1->lat, p1->lng, p2->lat, p2->lng);
 }
 
+double time_difference(Point* p1, Point* p2) {
+    return abs(p2->t - p1->t) / (double) 1000;
+}
+
+double angular_speed(Point* p1, Point* p2) {
+    return distance(p1, p2) / time_difference(p1, p2);
+}
+
 void printPoint(Point* p) {
     printf("Id: %d\tLat: %lf\tLng: %lf\tTimestamp: %lld\n", p->taxiId, p->lat, p->lng, p->t);
 }
@@ -185,6 +194,12 @@ typedef struct {
     double minLat, minLng, maxLat, maxLng;
 } Trajectory;
 
+Trajectory* newTrajectory();
+void addPoint(Trajectory*, Point*);
+Point* getPoint(Trajectory*, int);
+void printTrajectory(Trajectory*);
+void softFreeTrajectory(Trajectory*);
+
 Trajectory* newTrajectory() {
     Trajectory* t = (Trajectory*) malloc(sizeof(Trajectory));
     t->id = -1;
@@ -195,6 +210,7 @@ Trajectory* newTrajectory() {
 }
 
 void addPoint(Trajectory* t, Point* p) {
+    // if (t->filled > 0 && getPoint(t, t->filled-1)->t == p->t) return;
     if (t->filled >= t->size) {
         t->size += 100;
         t->points = (Point**) realloc(t->points, sizeof(Point*) * t->size);
@@ -331,7 +347,8 @@ void writeTrajectory(TrajectoryWriter* writer, Trajectory* t) {
     int i;
     for (i = 0; i < t->filled; i++) {
         Point* p = t->points[i];
-        fprintf(writer->output, "%d;%d;%.8lf;%.8lf;%lld\n", p->taxiId, writer->nextId, p->lat, p->lng, p->t);
+        if (i > 0 && p->t != t->points[i-1]->t)
+            fprintf(writer->output, "%d;%d;%.8lf;%.8lf;%lld\n", p->taxiId, writer->nextId, p->lat, p->lng, p->t);
     }
     writer->nextId ++;
 }
@@ -350,12 +367,15 @@ void sortTrajectory(Trajectory* t) {
 }
 
 int getClosestPointIndex(Trajectory* t, Point* p, int rangeStart, int rangeEnd) {
+    while(rangeStart < rangeEnd && t->points[rangeStart]->t == p->t) 
+        rangeStart++;
     if (rangeStart >= t->filled)
         return t->filled;
     int i;
     int minIndex = rangeStart;
     double minDistance = distance(p, t->points[minIndex]);
     for (i = rangeStart+1; i < rangeEnd; i++) {
+        if (t->points[i]->t == p->t) continue;
         double newDistance = distance(p, t->points[i]);
         if (newDistance < minDistance) {
             minDistance = newDistance;
@@ -381,6 +401,7 @@ AuxParameter* newAuxParameter(Trajectory* t, TrajectoryWriter* writer, StopWatch
 
 void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer, StopWatch** watches) {
     int start = 0, end = 1;
+    if (!isValid(originalTrajectory)) return;
     // printf("\tSorting... ");
     startClock(watches[1]);
     sortTrajectory(originalTrajectory);
@@ -392,15 +413,22 @@ void sliceNspliceNsave(Trajectory* originalTrajectory, TrajectoryWriter* writer,
     while (start < originalTrajectory->filled) {
         p = originalTrajectory->points[start];
         addPoint(t, p);
-        while(end < originalTrajectory->filled && originalTrajectory->points[end]->t < p->t + TIME_LIMIT) 
+        // if (writer->nextId == 320)
+        //     printPoint(p);
+        while(end < originalTrajectory->filled && time_difference(originalTrajectory->points[end], p) < TIME_LIMIT) 
             end++;
         startClock(watches[4]);
         int minIndex = getClosestPointIndex(originalTrajectory, p, start+1, end);
+        // if (minIndex >= end) printf("\n\nIMPOSSIBRU!!!!!!\n\n");
         Point* closest = NULL;
-        if (minIndex < originalTrajectory->filled)
+        if (minIndex < end)
             closest = originalTrajectory->points[minIndex];
         stopClock(watches[4]);
-        if (minIndex == originalTrajectory->filled || distance(p, closest) * 1000 / (closest->t - p->t) > MAX_ANGULAR_SPEED) {
+        // if (closest != NULL &&  distance(p, closest) > 0.001 && angular_speed(p, closest) > MAX_ANGULAR_SPEED <= MAX_ANGULAR_SPEED) {
+        //     printf(" -- %lf / %lf -> ", distance(p, closest), time_difference(p, closest));
+        //     printf("speed: %.8lf\n", angular_speed(p, closest));
+        // }
+        if (closest == NULL || angular_speed(p, closest) > MAX_ANGULAR_SPEED) {
             if (isValid(t)) {
                 startClock(watches[3]);
                 writeTrajectory(writer, t);
@@ -483,6 +511,8 @@ void readAndProcess(char* inputFileName, StopWatch** watches) {
 
 int main(int argc, char** argv) {
 
+    printf("max angular speed: %lf\n", MAX_ANGULAR_SPEED);
+
     if (argc != 2) {
         printf("Invalid number of arguments, expected 2, found %d\n", argc);
         return 1;
@@ -495,7 +525,7 @@ int main(int argc, char** argv) {
                             newStopWatch("number_of_points")};
     readAndProcess(argv[1], watches);
     int i;
-    for (i = 0; i < 7; i++) {
+    for (i = 0; i < 6; i++) {
         printf("%s : %.2lf s\n", watches[i]->name, watches[i]->current);
     }
 	return 0;
